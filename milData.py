@@ -35,11 +35,8 @@ from __future__ import division, absolute_import, unicode_literals, print_functi
 import sys
 import os
 
-import scipy as sci
 import numpy as np
 import pandas as pd
-import sklearn as skl
-from sklearn import preprocessing
 
 sys.path.append(os.path.join(os.getcwd(), "fileHandlerPy"))
 from prepareSaving import prepareSaving
@@ -72,8 +69,11 @@ def dict_to_arr(mydict, keys=None):
     myarr = None
     N_b = None
 
+
     if keys is None:
         keys = sorted(mydict.keys)
+
+    for k,key in enumerate(keys):
         if k == 0:  # we initialize the output array
             myarr = np.array(mydict[key])
             N_b = np.array([len(mydict[key])], dtype=np.int)
@@ -121,24 +121,36 @@ def arr_to_dic(myarr, keys, N_b):
     return mydict
 
 
-def find_pos(dict_, k, keys):
-    '''
-    Find the position of the overall kth element in one set of a dictionary.
+def find_pos(mydict, n, keys):
+    """
+    Find the bag and local position of the overall nth element in one set of a
+    dictionary.
 
-    :param dict_: The dictionary to search in.
-    :param k: The overall element position to look for.
-    :param keys: Odered list of keys to go through.
+    Parameters
+    ----------
+    mydict : dictionary
+        Dictionary with array_like values. Each such array_like must have the
+        same shape except for the first dimension.
+    n : int
+        The global position of the wanted instance.
+    keys : list
+        keys for each bag used for the ordering to look for instance n.
 
-    :return key, pos: The postion of the kth element.
-    '''
-    len_ = -1
-    for i, key in enumerate(keys):
-        len_ += len(dict_[key])
+    Returns
+    ----------
+    key : key
+        Dictionary with array_like values corresponding to the given keys.
+    l : int
 
-        if len_ == k:
-            return (key, len(dict_[key]) - 1)
-        elif len_ > k:
-            return (key, k - len_ + len(dict_[key]) - 1)
+    """
+    n_ = -1
+    for k, key in enumerate(keys):
+        n_ += len(mydict[key])
+
+        if n_ == n:
+            return (key, len(mydict[key]) - 1)
+        elif n_ > n:
+            return (key, n - n_ + len(mydict[key]) - 1)
         else:
             continue
 
@@ -175,7 +187,7 @@ def load_dict(fname):
     path : string, optional
         The path where to store the datafile.
     """
-    mydict = pd.read_json('test', typ='series').to_dict()
+    mydict = pd.read_json(fname, typ='series').to_dict()
     for key, value in mydict.items():
         mydict[key] = np.array(value)
     return mydict
@@ -229,7 +241,8 @@ class milData():
         Delete a whole bag.
     safe(self, path):
         Save all MIL data.
-
+    load(self, path):
+        Load all three  MIL data. files.
     """
 
     def __init__(self, name, CACHE=True):
@@ -244,7 +257,11 @@ class milData():
             Set if data shall be cached for faster access.
         """
         self.name = name
+        self.N_X = 0  # The number of instances stored
+        self.N_B = 0  # The number of bags stored
+        self.N_D = 0  # The nimension of each feature vector
         self.keys = None  # List of sorted keys of the dicts
+
         self._X_dict = None  # Dictionary with data per bags
         self._X_arr = None  # numpy.array with data
 
@@ -254,11 +271,7 @@ class milData():
         self._y_dict = None  # Dictionary with instance labels per bag
         self.__y_arr = None  # numpy.array with instance labels as for sorted key_s
 
-        self._dtype = None  # The numpy.dtype of the instances.
         self._pos_x = None  # Store instance positions for fast access
-        self._N_X = 0  # The number of instances stored
-        self._N_B = 0  # The number of bags stored
-        self._N_D = 0  # The nimension of each feature vector
         self.__CACHE = CACHE
 
     def get_X_as_dict(self, ):
@@ -475,29 +488,29 @@ class milData():
         UPDATE : bool, optional
             If True, bag labels will be recalculated to fit MIL constraints.
         """
-        self._X_arr = None
-        self._y_arr = None
-        self._z_arr = None
-        self._pos_x = None
 
-        if key in self.keys:
+        self.N_X +=1
+        self.N_D = len(x)
+
+        if key in self.keys: # We add to an existing bag
             self._X_dict[key] = np.concatenate((self._X_dict[key], np.array(x)), axis=0)
             self._y_dict[key] = np.concatenate((self._y_dict[key], np.array(y)), axis=0)
             if z is not None:
                 self._z_dict[key] = np.array(z)
-        else:
+        else: # we create a new bag
+            self.N_B += 1
             self._X_dict[key] = np.array(x)
             self._y_dict[key] = np.array(y)
             if z is not None:
                 self._z_dict[key] = np.array(z)
             else:
                 self._z_dict[key] = np.array(y)
-            self._N_B += 1
         if UPDATE:
             self._z_dict[key] = np.max(self._y_dict[key])
+
+        self.__clear()
         self.__sort_keys()
-        self._N_X +=1
-        self._N_D = len(x)
+
 
     def del_inst(self, n, UPDATE=True):
         """
@@ -531,11 +544,14 @@ class milData():
         UPDATE : bool, optional
             If True, bag labels will be recalculated to fit MIL constraints.
         """
-        if len(self._X_dict[key]) == 1:
+
+        self.N_X -= 1
+        if len(self._X_dict[key]) == 1: # We have to delete a bag
+            self.N_B -= 1
             del self._X_dict[key]
             del self._y_dict[key]
             del self._z_dict[key]
-            self._N_B -= 1
+
         else:
             self._X_dict[key] = np.delete(self._X_dict[key], l, 0)
             self._y_dict[key] = np.delete(self._X_dict[key], l, 0)
@@ -543,12 +559,7 @@ class milData():
             if UPDATE:
                 self._z_dict[key] = np.max(self._y_dict[key])
 
-        self._X_arr = None
-        self._y_arr = None
-        self._z_arr = None
-        self._pos_x = None
-
-        self._N_X -=1
+        self.__clear()
         self.__sort_keys()
 
     def del_bag(self, key):
@@ -561,17 +572,16 @@ class milData():
             The key of which bag to add to.
         """
 
-        self._N_B -= 1
-        self._N_X -= len(self._X_dict[key])
+        self.N_B -= 1
+        self.N_X -= len(self._X_dict[key])
 
         del self._X_dict[key]
         del self._y_dict[key]
         del self._z_dict[key]
 
-        self._X_arr = None
-        self._y_arr = None
-        self._z_arr = None
-        self._pos_x = None
+        self.__clear()
+        self.__sort_keys()
+
 
     def safe(self, path):
         """
@@ -588,10 +598,27 @@ class milData():
         save_dict(self._z_dict, self.name + "_z", path)
 
     def load(self, path):
+        """
+        Load all three  MIL data. files.
 
-        self._X_dict = load_dict()
-        self.__update()
+        Parameters
+        ----------
+        path : string
+            The path where to find the files.
+        """
+        path = os.path.expanduser(path)
+
+        self._X_dict = load_dict(os.path.join(self.name + "_x", path))
+        self._y_dict = load_dict(os.path.join(self.name + "_y", path))
+        self._z_dict = load_dict(os.path.join(self.name + "_z", path))
+
         self.__clear()
+        self.__sort_keys()
+        self.N_B = len(self.keys)
+        self.N_D = len(self._X_dict[self.keys[0]])
+        self.N_X = 0
+        for k,v in self._X_dict.items():
+            self.N_X += len(v)
 
     def __sort_keys(self):
         """
@@ -608,7 +635,14 @@ class milData():
         self.z_arr = dict_to_arr(self._z_dict, self.keys)
         self.__map_x()
 
-        # create dict in which bag to find each instance
+    def __clear(self):
+        """
+        Clear cached data
+        """
+        self._X_arr = None
+        self._y_arr = None
+        self._z_arr = None
+        self._pos_x = None
 
     def __map_x(self):
         """
@@ -617,12 +651,10 @@ class milData():
         self._pos_x = {}
         l = 0  # count along instance in bag
         b = 0  # count along bags
-        for i in range(self._N_X):
+        for i in range(self.N_X):
             if l < len(self._X_dict[self.keys[b]]):
                 l += 1
             else:
                 b += 1
                 l = 0
             self._pos_x[i] = [self.keys[b], l]
-
-
